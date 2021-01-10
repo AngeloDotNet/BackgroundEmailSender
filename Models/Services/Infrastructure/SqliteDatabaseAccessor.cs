@@ -38,6 +38,22 @@ namespace background_email_sender_master.Models.Services.Infrastructure
             }
         }
 
+        public async Task<T> QueryScalarAsync<T>(FormattableString formattableQuery, CancellationToken token)
+        {
+            try
+            {
+                using SqliteConnection conn = await GetOpenedConnection(token);
+                using SqliteCommand cmd = GetCommand(formattableQuery, conn);
+                
+                object result = await cmd.ExecuteScalarAsync();
+                return (T)Convert.ChangeType(result, typeof(T));
+            }
+            catch (SqliteException exc) when (exc.SqliteErrorCode == 19)
+            {
+                throw new ConstraintViolationException(exc);
+            }
+        }
+
         public async Task<DataSet> QueryAsync(FormattableString formattableQuery, CancellationToken token)
         {
             logger.LogInformation(formattableQuery.Format, formattableQuery.GetArguments());
@@ -63,6 +79,7 @@ namespace background_email_sender_master.Models.Services.Infrastructure
             {
                 throw new ConstraintViolationException(exc);
             }
+
         }
 
         private static SqliteCommand GetCommand(FormattableString formattableQuery, SqliteConnection conn)

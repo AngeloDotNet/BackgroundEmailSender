@@ -1,5 +1,4 @@
 using System;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
@@ -13,6 +12,7 @@ using Microsoft.Extensions.Options;
 using background_email_sender_master.Models.Services.Infrastructure;
 using MimeKit;
 using System.Data;
+using Background_Email_Sender.Models.Enums;
 
 namespace BackgroundEmailSenderSample.HostedServices
 {
@@ -35,18 +35,12 @@ namespace BackgroundEmailSenderSample.HostedServices
 
         public async Task SendEmailAsync(string email, string subject, string htmlMessage)
         {
-            var message = new MimeMessage();
-            message.From.Add(MailboxAddress.Parse(optionsMonitor.CurrentValue.Sender));
-            message.To.Add(MailboxAddress.Parse(email));
-            message.Subject = subject;
-            message.Body = new TextPart("html")
-            {
-                Text = htmlMessage
-            };
+            var messageId = Guid.NewGuid().ToString();
+            var message = CreateMessage(email, subject, htmlMessage, messageId);
 
-            message.MessageId = Guid.NewGuid().ToString();
+            int affectedRows = await db.CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, Status) 
+                                                        VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, {nameof(MailStatus.InProgress)})");
 
-            int affectedRows = await db.CommandAsync($"INSERT INTO EmailMessages (Id, Recipient, Subject, Message) VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage})");
             if (affectedRows != 1)
             {
                 throw new InvalidOperationException("Could not persist email message");
@@ -59,20 +53,15 @@ namespace BackgroundEmailSenderSample.HostedServices
         {
             logger.LogInformation("Starting background e-mail delivery");
 
-            FormattableString query = $@"SELECT Id, Recipient, Subject, Message FROM EmailMessages";
+            FormattableString query = $@"SELECT Id, Recipient, Subject, Message FROM EmailMessages WHERE Status<>{nameof(MailStatus.Sended)} AND Status<>{nameof(MailStatus.Deleted)}";
             DataSet dataSet = await db.QueryAsync(query);
 
             foreach (DataRow row in dataSet.Tables[0].Rows)
             {
-                var message = new MimeMessage();
-                    message.From.Add(MailboxAddress.Parse(optionsMonitor.CurrentValue.Sender));
-                    message.To.Add(MailboxAddress.Parse(Convert.ToString(row["Email"])));
-                    message.Subject = Convert.ToString(row["Subject"]);
-                    message.MessageId = Convert.ToString(row["Id"]);
-                    message.Body = new TextPart("html")
-                    {
-                        Text = Convert.ToString(row["Message"])
-                    };
+                var message = CreateMessage(Convert.ToString(row["Email"]), 
+                                            Convert.ToString(row["Subject"]), 
+                                            Convert.ToString(row["Message"]), 
+                                            Convert.ToString(row["Id"]));
 
                 await this.mailMessages.SendAsync(message);
             }
@@ -118,15 +107,18 @@ namespace BackgroundEmailSenderSample.HostedServices
 
                     var options = this.optionsMonitor.CurrentValue;
                     using var client = new SmtpClient();
+
                     await client.ConnectAsync(options.Host, options.Port, options.Security);
                     if (!string.IsNullOrEmpty(options.Username))
                     {
                         await client.AuthenticateAsync(options.Username, options.Password);
                     }
+
                     await client.SendAsync(message);
                     await client.DisconnectAsync(true);
-                    await db.CommandAsync($"DELETE FROM EmailMessages WHERE Id={message.MessageId}");
-                    logger.LogInformation($"E-mail sent to {message.To}");
+
+                    await db.CommandAsync($"UPDATE EmailMessages SET Status={nameof(MailStatus.Sended)} WHERE Id={message.MessageId}");
+                    logger.LogInformation($"E-mail sent successfully to {message.To}");
                 }
                 catch (OperationCanceledException)
                 {
@@ -136,7 +128,32 @@ namespace BackgroundEmailSenderSample.HostedServices
                 {
                     logger.LogError(exc, "Couldn't send an e-mail to {recipient}", message.To[0]);
 
-                    await Task.Delay(1000);
+                    FormattableString query = $@"SELECT SenderCount FROM EmailMessages WHERE Id={message.MessageId}";
+                    DataSet dataSet = await db.QueryAsync(query);
+
+                    var MessageTable = dataSet.Tables[0];
+                    int counter = 0;
+
+                    if (MessageTable.Rows.Count == 1)
+                    {
+                        var messageRow = MessageTable.Rows[0];
+                        counter = Convert.ToInt32(messageRow["SenderCount"]);
+
+                        if (counter == 25)
+                        {
+                            //Il contatore dei tentativi di invio ha raggiunto la quota di 25, imposto lo stato di Deleted alla mail, in modo che non venga riaccodata per nuovi tentativi.
+                            await db.CommandAsync($"UPDATE EmailMessages SET Status={nameof(MailStatus.Deleted)} WHERE Id={message.MessageId}");
+                        }
+                        else
+                        {
+                            //Aggiungo +1 al contatore dei tentativi di invio
+                            counter = counter + 1;
+                            await db.CommandAsync($"UPDATE EmailMessages SET SenderCount={counter} WHERE Id={message.MessageId}");
+                        }
+                    }
+
+                    //Modificato il tempo di delay a 10 secondi
+                    await Task.Delay(10000); 
                     await mailMessages.SendAsync(message);
                 }
             }
@@ -147,6 +164,21 @@ namespace BackgroundEmailSenderSample.HostedServices
         public void Dispose()
         {
             CancelSendTask();
+        }
+
+        private MimeMessage CreateMessage(string email, string subject, string htmlMessage, string messageId = null)
+        {
+            var message = new MimeMessage();
+            
+            message.From.Add(MailboxAddress.Parse(optionsMonitor.CurrentValue.Sender));
+            message.To.Add(MailboxAddress.Parse(email));
+            message.Subject = subject;
+            
+            // Se il messageId non è stato fornito, allora lo genero.
+            message.MessageId = messageId ?? Guid.NewGuid().ToString();
+            message.Body = new TextPart("html") { Text = htmlMessage };
+
+            return message;
         }
     }
 }

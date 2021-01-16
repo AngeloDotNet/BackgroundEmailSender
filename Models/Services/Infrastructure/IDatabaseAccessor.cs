@@ -3,7 +3,7 @@ using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace background_email_sender_master.Models.Services.Infrastructure
+namespace BackgroundEmailSenderSample.Models.Services.Infrastructure
 {
     public interface IDatabaseAccessor
     {

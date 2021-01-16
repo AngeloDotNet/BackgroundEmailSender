@@ -2,17 +2,18 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
-using BackgroundEmailSenderSample.Models.Options;
-using MailKit.Net.Smtp;
+using System.Data;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using background_email_sender_master.Models.Services.Infrastructure;
 using MimeKit;
-using System.Data;
-using Background_Email_Sender.Models.Enums;
+using MailKit.Net.Smtp;
+using SequentialGuid;
+using BackgroundEmailSenderSample.Models.Options;
+using BackgroundEmailSenderSample.Models.Services.Infrastructure;
+using BackgroundEmailSenderSample.Models.Enums;
 
 namespace BackgroundEmailSenderSample.HostedServices
 {
@@ -20,11 +21,11 @@ namespace BackgroundEmailSenderSample.HostedServices
     {
         private readonly BufferBlock<MimeMessage> mailMessages;
         private readonly ILogger logger;
-        private Task sendTask;
-        private CancellationTokenSource cancellationTokenSource;
         private readonly IOptionsMonitor<SmtpOptions> optionsMonitor;
         private readonly IDatabaseAccessor db;
-        
+        private CancellationTokenSource deliveryCancellationTokenSource;
+        private Task deliveryTask;
+
         public EmailSenderHostedService(IConfiguration configuration, IDatabaseAccessor db, IOptionsMonitor<SmtpOptions> optionsMonitor, ILogger<EmailSenderHostedService> logger)
         {
             this.optionsMonitor = optionsMonitor;
@@ -35,63 +36,70 @@ namespace BackgroundEmailSenderSample.HostedServices
 
         public async Task SendEmailAsync(string email, string subject, string htmlMessage)
         {
-            var messageId = Guid.NewGuid().ToString();
-            var message = CreateMessage(email, subject, htmlMessage, messageId);
+            var message = CreateMessage(email, subject, htmlMessage);
 
             int affectedRows = await db.CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, Status) 
                                                         VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, {nameof(MailStatus.InProgress)})");
 
             if (affectedRows != 1)
             {
-                throw new InvalidOperationException("Could not persist email message");
+                throw new InvalidOperationException($"Could not persist email message to {email}");
             }
 
             await this.mailMessages.SendAsync(message);
         }
 
-        public async Task StartAsync(CancellationToken cancellationToken)
+        public async Task StartAsync(CancellationToken token)
         {
             logger.LogInformation("Starting background e-mail delivery");
 
-            FormattableString query = $@"SELECT Id, Recipient, Subject, Message FROM EmailMessages WHERE Status<>{nameof(MailStatus.Sended)} AND Status<>{nameof(MailStatus.Deleted)}";
+            FormattableString query = $@"SELECT Id, Recipient, Subject, Message FROM EmailMessages WHERE Status NOT IN ({nameof(MailStatus.Sent)}, {nameof(MailStatus.Deleted)})";
             DataSet dataSet = await db.QueryAsync(query);
 
-            foreach (DataRow row in dataSet.Tables[0].Rows)
+            try
             {
-                var message = CreateMessage(Convert.ToString(row["Email"]), 
-                                            Convert.ToString(row["Subject"]), 
-                                            Convert.ToString(row["Message"]), 
-                                            Convert.ToString(row["Id"]));
+                foreach (DataRow row in dataSet.Tables[0].Rows)
+                {
+                    var message = CreateMessage(Convert.ToString(row["Recipient"]),
+                                                Convert.ToString(row["Subject"]),
+                                                Convert.ToString(row["Message"]),
+                                                Convert.ToString(row["Id"]));
 
-                await this.mailMessages.SendAsync(message);
+                    await this.mailMessages.SendAsync(message, token);
+                }
+
+                logger.LogInformation("Email delivery started: {count} message(s) were resumed for delivery", dataSet.Tables[0].Rows.Count);
+
+                deliveryCancellationTokenSource = new CancellationTokenSource();
+                deliveryTask = DeliverAsync(deliveryCancellationTokenSource.Token);
             }
-
-            cancellationTokenSource = new CancellationTokenSource();
-            sendTask = DeliverAsync(cancellationTokenSource.Token);
-            
-            await Task.CompletedTask;
+            catch (Exception startException)
+            {
+                logger.LogError(startException, "Couldn't start email delivery");
+            }
         }
 
-        public async Task StopAsync(CancellationToken cancellationToken)
+        public async Task StopAsync(CancellationToken token)
         {
-            CancelSendTask();
-            await Task.WhenAny(sendTask, Task.Delay(Timeout.Infinite, cancellationToken));
+            CancelDeliveryTask();
+            // Wait for the send task to stop gracefully. If it takes too much, then we stop waiting
+            // as soon as the application cancels the token (i.e when it signals it's not willing to wait any longer)
+            await Task.WhenAny(deliveryTask, Task.Delay(Timeout.Infinite, token));
         }
 
-        private void CancelSendTask()
+        private void CancelDeliveryTask()
         {
             try
             {
-                if (cancellationTokenSource != null)
+                if (deliveryCancellationTokenSource != null)
                 {
                     logger.LogInformation("Stopping e-mail background delivery");
-                    cancellationTokenSource.Cancel();
-                    cancellationTokenSource = null;
+                    deliveryCancellationTokenSource.Cancel();
+                    deliveryCancellationTokenSource = null;
                 }
             }
             catch
             {
-
             }
         }
 
@@ -108,53 +116,43 @@ namespace BackgroundEmailSenderSample.HostedServices
                     var options = this.optionsMonitor.CurrentValue;
                     using var client = new SmtpClient();
 
-                    await client.ConnectAsync(options.Host, options.Port, options.Security);
+                    await client.ConnectAsync(options.Host, options.Port, options.Security, token);
                     if (!string.IsNullOrEmpty(options.Username))
                     {
-                        await client.AuthenticateAsync(options.Username, options.Password);
+                        await client.AuthenticateAsync(options.Username, options.Password, token);
                     }
 
-                    await client.SendAsync(message);
-                    await client.DisconnectAsync(true);
+                    await client.SendAsync(message, token);
+                    await client.DisconnectAsync(true, token);
 
-                    await db.CommandAsync($"UPDATE EmailMessages SET Status={nameof(MailStatus.Sended)} WHERE Id={message.MessageId}");
+                    await db.CommandAsync($"UPDATE EmailMessages SET Status={nameof(MailStatus.Sent)} WHERE Id={message.MessageId}", token);
                     logger.LogInformation($"E-mail sent successfully to {message.To}");
                 }
                 catch (OperationCanceledException)
                 {
                     break;
                 }
-                catch (Exception exc)
+                catch (Exception sendException)
                 {
-                    logger.LogError(exc, "Couldn't send an e-mail to {recipient}", message.To[0]);
+                    var recipient = message?.To[0];
+                    logger.LogError(sendException, "Couldn't send an e-mail to {recipient}", recipient);
 
-                    FormattableString query = $@"SELECT SenderCount FROM EmailMessages WHERE Id={message.MessageId}";
-                    DataSet dataSet = await db.QueryAsync(query);
-
-                    var MessageTable = dataSet.Tables[0];
-                    int counter = 0;
-
-                    if (MessageTable.Rows.Count == 1)
+                    // Increment the sender count
+                    try
                     {
-                        var messageRow = MessageTable.Rows[0];
-                        counter = Convert.ToInt32(messageRow["SenderCount"]);
-
-                        if (counter == 25)
+                        bool shouldRequeue = await db.QueryScalarAsync<bool>($"UPDATE EmailMessages SET SenderCount = SenderCount + 1, Status=CASE WHEN SenderCount < {optionsMonitor.CurrentValue.MaxSenderCount} THEN Status ELSE {nameof(MailStatus.Deleted)} END WHERE Id={message.MessageId}; SELECT COUNT(*) FROM EmailMessages WHERE Id={message.MessageId} AND Status NOT IN ({nameof(MailStatus.Deleted)}, {nameof(MailStatus.Sent)})", token);
+                        if (shouldRequeue)
                         {
-                            //Il contatore dei tentativi di invio ha raggiunto la quota di 25, imposto lo stato di Deleted alla mail, in modo che non venga riaccodata per nuovi tentativi.
-                            await db.CommandAsync($"UPDATE EmailMessages SET Status={nameof(MailStatus.Deleted)} WHERE Id={message.MessageId}");
-                        }
-                        else
-                        {
-                            //Aggiungo +1 al contatore dei tentativi di invio
-                            counter = counter + 1;
-                            await db.CommandAsync($"UPDATE EmailMessages SET SenderCount={counter} WHERE Id={message.MessageId}");
+                            await mailMessages.SendAsync(message, token);
                         }
                     }
+                    catch (Exception requeueException)
+                    {
+                        logger.LogError(requeueException, "Couldn't requeue message to {0}", recipient);
+                    }
 
-                    //Modificato il tempo di delay a 10 secondi
-                    await Task.Delay(10000); 
-                    await mailMessages.SendAsync(message);
+                    // An unexpected error occurred during delivery, so we wait before moving on
+                    await Task.Delay(optionsMonitor.CurrentValue.DelayOnError, token);
                 }
             }
 
@@ -163,19 +161,19 @@ namespace BackgroundEmailSenderSample.HostedServices
 
         public void Dispose()
         {
-            CancelSendTask();
+            CancelDeliveryTask();
         }
 
         private MimeMessage CreateMessage(string email, string subject, string htmlMessage, string messageId = null)
         {
             var message = new MimeMessage();
-            
+
             message.From.Add(MailboxAddress.Parse(optionsMonitor.CurrentValue.Sender));
             message.To.Add(MailboxAddress.Parse(email));
             message.Subject = subject;
-            
+
             // Se il messageId non è stato fornito, allora lo genero.
-            message.MessageId = messageId ?? Guid.NewGuid().ToString();
+            message.MessageId = messageId ?? SequentialGuidGenerator.Instance.NewGuid().ToString();
             message.Body = new TextPart("html") { Text = htmlMessage };
 
             return message;

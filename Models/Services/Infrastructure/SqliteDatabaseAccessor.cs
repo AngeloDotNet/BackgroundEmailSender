@@ -3,14 +3,14 @@ using System.Collections.Generic;
 using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
-using background_email_sender_master.Models.Exceptions.Infrastructure;
-using background_email_sender_master.Models.Options;
-using background_email_sender_master.Models.ValueTypes;
+using BackgroundEmailSenderSample.Models.Exceptions.Infrastructure;
+using BackgroundEmailSenderSample.Models.Options;
+using BackgroundEmailSenderSample.Models.ValueTypes;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace background_email_sender_master.Models.Services.Infrastructure
+namespace BackgroundEmailSenderSample.Models.Services.Infrastructure
 {
     public class SqliteDatabaseAccessor : IDatabaseAccessor
     {

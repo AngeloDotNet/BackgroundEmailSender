@@ -1,6 +1,6 @@
 using System;
 
-namespace background_email_sender_master.Models.Exceptions.Infrastructure
+namespace BackgroundEmailSenderSample.Models.Exceptions.Infrastructure
 {
     public class ConstraintViolationException : Exception
     {

@@ -1,7 +1,6 @@
-﻿using background_email_sender_master.Models.Options;
-using background_email_sender_master.Models.Services.Infrastructure;
+﻿using BackgroundEmailSenderSample.Models.Options;
+using BackgroundEmailSenderSample.Models.Services.Infrastructure;
 using BackgroundEmailSenderSample.HostedServices;
-using BackgroundEmailSenderSample.Models.Options;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity.UI.Services;

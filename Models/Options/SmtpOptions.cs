@@ -1,3 +1,4 @@
+using System;
 using MailKit.Security;
 
 namespace BackgroundEmailSenderSample.Models.Options
@@ -10,5 +11,7 @@ namespace BackgroundEmailSenderSample.Models.Options
         public string Username { get; set; }
         public string Password { get; set; }
         public string Sender { get; set; }
+        public int MaxSenderCount { get; set; }
+        public TimeSpan DelayOnError { get; set; }
     }
 }

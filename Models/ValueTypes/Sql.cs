@@ -1,4 +1,4 @@
-namespace background_email_sender_master.Models.ValueTypes
+namespace BackgroundEmailSenderSample.Models.ValueTypes
 {
     public class Sql 
     {

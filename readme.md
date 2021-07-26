@@ -9,4 +9,5 @@ I thank Moreno G. for providing me with the appropriate information so that I co
 
 ## Getting started
 Edit the [appsettings.json](appsettings.json) file with your SMTP server data. Then, just run the application by typing `dotnet run`. The .NET Core SDK 3.1 (or greater) must be installed in your system. Fill in the form and hit the Send button.
+
 ![home.png](home.png)

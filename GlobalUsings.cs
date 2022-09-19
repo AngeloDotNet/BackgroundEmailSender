@@ -20,3 +20,8 @@ global using MimeKit;
 global using MailKit.Net.Smtp;
 global using SequentialGuid;
 global using BackgroundEmailSenderSample.Models.Enums;
+global using System.ComponentModel.DataAnnotations;
+global using MailKit.Security;
+global using BackgroundEmailSenderSample.Models.Exceptions.Infrastructure;
+global using BackgroundEmailSenderSample.Models.ValueTypes;
+global using Microsoft.Data.Sqlite;

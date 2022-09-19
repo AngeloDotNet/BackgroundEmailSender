@@ -1,9 +1,8 @@
-namespace BackgroundEmailSenderSample.Models.Enums
+namespace BackgroundEmailSenderSample.Models.Enums;
+
+public enum MailStatus
 {
-    public enum MailStatus
-    {
-        InProgress,
-        Sent,
-        Deleted   
-    }
+    InProgress,
+    Sent,
+    Deleted   
 }

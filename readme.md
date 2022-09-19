@@ -8,6 +8,6 @@ This project uses the `MailKit` package to deliver emails. The Hosted Service im
 I thank Moreno G. for providing me with the appropriate information so that I could finish the implementation and make it usable for the production environment.
 
 ## Getting started
-Edit the [appsettings.json](appsettings.json) file with your SMTP server data. Then, just run the application by typing `dotnet run`. The .NET Core SDK 3.1 (or greater) must be installed in your system. Fill in the form and hit the Send button.
+Edit the [appsettings.json](appsettings.json) file with your SMTP server data. Then, just run the application by typing `dotnet run`. The .NET SDK 6.x (or greater) must be installed in your system. Fill in the form and hit the Send button.
 
 ![home.png](home.png)

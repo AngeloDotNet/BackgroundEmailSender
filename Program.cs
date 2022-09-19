@@ -1,27 +1,22 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
+﻿namespace BackgroundEmailSenderSample;
 
-namespace BackgroundEmailSenderSample
+public class Program
 {
-    public class Program
+    public static void Main(string[] args)
     {
-        public static void Main(string[] args)
-        {
-            BuildWebHost(args).Run();
-        }
+        // Vari esempi per usare il nuovo builder: https://docs.microsoft.com/en-us/aspnet/core/migration/50-to-60-samples
+        WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
-        public static IWebHost BuildWebHost(string[] args) =>
-            WebHost.CreateDefaultBuilder(args)
-                .UseShutdownTimeout(TimeSpan.FromSeconds(10))
-                .UseEnvironment("Development")
-                .UseStartup<Startup>()
-                .Build();
+        Startup startup = new(builder.Configuration);
+
+        // Aggiungere i servizi per la dependency injection (metodo ConfigureServices)
+        startup.ConfigureServices(builder.Services);
+
+        WebApplication app = builder.Build();
+
+        // Usiamo i middleware (metodo Configure)
+        startup.Configure(app);
+
+        app.Run();
     }
 }

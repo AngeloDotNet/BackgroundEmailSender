@@ -1,5 +1,7 @@
 <img alt="GitHub" src="https://img.shields.io/github/license/aepservernet/BackgroundEmailSender?style=for-the-badge"> <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/aepservernet/BackgroundEmailSender?style=for-the-badge">
 
+[![.NET](https://github.com/AepServerNet/BackgroundEmailSender/actions/workflows/dotnet.yml/badge.svg)](https://github.com/AepServerNet/BackgroundEmailSender/actions/workflows/dotnet.yml)
+
 
 # Background email sender sample
 This application is a clone of the homonymous application of the one developed by BrightSoul available at this link: https://github.com/BrightSoul/background-email-sender.

@@ -1,16 +1,7 @@
 namespace BackgroundEmailSenderSample.Models.Services.Infrastructure;
 
-public class SqliteDatabaseAccessor : IDatabaseAccessor
+public class SqliteDatabaseAccessor(ILogger<SqliteDatabaseAccessor> logger, IOptionsMonitor<ConnectionStringsOptions> connectionStringOptions) : IDatabaseAccessor
 {
-    private readonly ILogger<SqliteDatabaseAccessor> logger;
-    private readonly IOptionsMonitor<ConnectionStringsOptions> connectionStringOptions;
-
-    public SqliteDatabaseAccessor(ILogger<SqliteDatabaseAccessor> logger, IOptionsMonitor<ConnectionStringsOptions> connectionStringOptions)
-    {
-        this.logger = logger;
-        this.connectionStringOptions = connectionStringOptions;
-    }
-
     public async Task<int> CommandAsync(FormattableString formattableCommand, CancellationToken token)
     {
         try
@@ -18,7 +9,7 @@ public class SqliteDatabaseAccessor : IDatabaseAccessor
             using SqliteConnection conn = await GetOpenedConnection(token);
             using SqliteCommand cmd = GetCommand(formattableCommand, conn);
 
-            int affectedRows = await cmd.ExecuteNonQueryAsync(token);
+            var affectedRows = await cmd.ExecuteNonQueryAsync(token);
 
             return affectedRows;
         }
@@ -34,9 +25,8 @@ public class SqliteDatabaseAccessor : IDatabaseAccessor
         {
             using SqliteConnection conn = await GetOpenedConnection(token);
             using SqliteCommand cmd = GetCommand(formattableQuery, conn);
-            
-            object result = await cmd.ExecuteScalarAsync();
 
+            var result = await cmd.ExecuteScalarAsync();
             return (T)Convert.ChangeType(result, typeof(T));
         }
         catch (SqliteException exc) when (exc.SqliteErrorCode == 19)
@@ -55,7 +45,6 @@ public class SqliteDatabaseAccessor : IDatabaseAccessor
         try
         {
             using var reader = await cmd.ExecuteReaderAsync(token);
-
             var dataSet = new DataSet();
 
             do
@@ -64,7 +53,7 @@ public class SqliteDatabaseAccessor : IDatabaseAccessor
                 dataSet.Tables.Add(dataTable);
                 dataTable.Load(reader);
 
-            } 
+            }
             while (!reader.IsClosed);
 
             return dataSet;
@@ -92,11 +81,11 @@ public class SqliteDatabaseAccessor : IDatabaseAccessor
             sqliteParameters.Add(parameter);
             queryArguments[i] = "@" + i;
         }
-        string query = formattableQuery.ToString();
 
+        var query = formattableQuery.ToString();
         var cmd = new SqliteCommand(query, conn);
-        cmd.Parameters.AddRange(sqliteParameters);
 
+        cmd.Parameters.AddRange(sqliteParameters);
         return cmd;
     }
 
@@ -105,7 +94,7 @@ public class SqliteDatabaseAccessor : IDatabaseAccessor
         var conn = new SqliteConnection(connectionStringOptions.CurrentValue.Default);
 
         await conn.OpenAsync(token);
-        
+
         return conn;
     }
 }

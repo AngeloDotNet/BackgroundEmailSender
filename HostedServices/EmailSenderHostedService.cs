@@ -1,34 +1,25 @@
 namespace BackgroundEmailSenderSample.HostedServices;
 
-public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposable
+public class EmailSenderHostedService(IDatabaseAccessor db, IOptionsMonitor<SmtpOptions> optionsMonitor, ILogger<EmailSenderHostedService> logger) : IEmailSender, IHostedService, IDisposable
 {
-    private readonly BufferBlock<MimeMessage> mailMessages;
-    private readonly ILogger logger;
-    private readonly IOptionsMonitor<SmtpOptions> optionsMonitor;
-    private readonly IDatabaseAccessor db;
+    private readonly BufferBlock<MimeMessage> mailMessages = new BufferBlock<MimeMessage>();
+    private readonly ILogger logger = logger;
 
     private CancellationTokenSource deliveryCancellationTokenSource;
     private Task deliveryTask;
 
-    public EmailSenderHostedService(IConfiguration configuration, IDatabaseAccessor db, IOptionsMonitor<SmtpOptions> optionsMonitor, ILogger<EmailSenderHostedService> logger)
-    {
-        this.optionsMonitor = optionsMonitor;
-        this.logger = logger;
-        this.mailMessages = new BufferBlock<MimeMessage>();
-        this.db = db;
-    }
-
     public async Task SendEmailAsync(string email, string subject, string htmlMessage)
     {
         var message = CreateMessage(email, subject, htmlMessage);
-        int affectedRows = await db.CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, Status) 
-                                                    VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, {nameof(MailStatus.InProgress)})");
+        var affectedRows = await db.CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, 
+                                                   Status) VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, 
+                                                   {nameof(MailStatus.InProgress)})");
         if (affectedRows != 1)
         {
             throw new InvalidOperationException($"Could not persist email message to {email}");
         }
 
-        await this.mailMessages.SendAsync(message);
+        await mailMessages.SendAsync(message);
     }
 
     public async Task StartAsync(CancellationToken token)
@@ -46,8 +37,9 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
                                             Convert.ToString(row["Subject"]),
                                             Convert.ToString(row["Message"]),
                                             Convert.ToString(row["Id"]));
-                await this.mailMessages.SendAsync(message, token);
+                await mailMessages.SendAsync(message, token);
             }
+
             logger.LogInformation("Email delivery started: {count} message(s) were resumed for delivery", dataSet.Tables[0].Rows.Count);
             deliveryCancellationTokenSource = new CancellationTokenSource();
             deliveryTask = DeliverAsync(deliveryCancellationTokenSource.Token);
@@ -78,8 +70,7 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
             }
         }
         catch
-        {
-        }
+        { }
     }
 
     public async Task DeliverAsync(CancellationToken token)
@@ -89,11 +80,12 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         while (!token.IsCancellationRequested)
         {
             MimeMessage message = null;
+
             try
             {
                 message = await mailMessages.ReceiveAsync(token);
 
-                var options = this.optionsMonitor.CurrentValue;
+                var options = optionsMonitor.CurrentValue;
 
                 using var client = new SmtpClient();
 
@@ -124,6 +116,7 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
                 try
                 {
                     bool shouldRequeue = await db.QueryScalarAsync<bool>($"UPDATE EmailMessages SET SenderCount = SenderCount + 1, Status=CASE WHEN SenderCount < {optionsMonitor.CurrentValue.MaxSenderCount} THEN Status ELSE {nameof(MailStatus.Deleted)} END WHERE Id={message.MessageId}; SELECT COUNT(*) FROM EmailMessages WHERE Id={message.MessageId} AND Status NOT IN ({nameof(MailStatus.Deleted)}, {nameof(MailStatus.Sent)})", token);
+
                     if (shouldRequeue)
                     {
                         await mailMessages.SendAsync(message, token);

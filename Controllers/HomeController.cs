@@ -6,14 +6,16 @@ public class HomeController : Controller
     {
         return View();
     }
+
     [HttpPost]
-    public async Task<IActionResult> SendMail(ContactInputModel inputModel, [FromServices] IEmailSender emailSender) 
+    public async Task<IActionResult> SendMail(ContactInputModel inputModel, [FromServices] IEmailSender emailSender)
     {
         await emailSender.SendEmailAsync(inputModel.Email, "Request from our website", inputModel.ToHtmlMessage());
         return RedirectToAction(nameof(ThankYou));
     }
-    
-    public IActionResult ThankYou() {
+
+    public IActionResult ThankYou()
+    {
         return View();
     }
 }

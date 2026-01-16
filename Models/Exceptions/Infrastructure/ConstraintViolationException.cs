@@ -1,7 +1,5 @@
 namespace BackgroundEmailSenderSample.Models.Exceptions.Infrastructure;
 
-public class ConstraintViolationException : Exception
-{
-    public ConstraintViolationException(Exception innerException) : base($"A violation occurred for a database constraint", innerException)
-    { }
-}
+public class ConstraintViolationException(Exception innerException)
+    : Exception($"A violation occurred for a database constraint", innerException)
+{ }

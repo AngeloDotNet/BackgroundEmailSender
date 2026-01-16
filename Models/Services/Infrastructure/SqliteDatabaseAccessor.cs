@@ -6,8 +6,8 @@ public class SqliteDatabaseAccessor(ILogger<SqliteDatabaseAccessor> logger, IOpt
     {
         try
         {
-            using SqliteConnection conn = await GetOpenedConnection(token);
-            using SqliteCommand cmd = GetCommand(formattableCommand, conn);
+            using var conn = await GetOpenedConnectionAsync(token);
+            using var cmd = GetCommand(formattableCommand, conn);
 
             var affectedRows = await cmd.ExecuteNonQueryAsync(token);
 
@@ -23,10 +23,11 @@ public class SqliteDatabaseAccessor(ILogger<SqliteDatabaseAccessor> logger, IOpt
     {
         try
         {
-            using SqliteConnection conn = await GetOpenedConnection(token);
-            using SqliteCommand cmd = GetCommand(formattableQuery, conn);
+            using var conn = await GetOpenedConnectionAsync(token);
+            using var cmd = GetCommand(formattableQuery, conn);
 
-            var result = await cmd.ExecuteScalarAsync();
+            var result = await cmd.ExecuteScalarAsync(token);
+
             return (T)Convert.ChangeType(result, typeof(T));
         }
         catch (SqliteException exc) when (exc.SqliteErrorCode == 19)
@@ -39,8 +40,8 @@ public class SqliteDatabaseAccessor(ILogger<SqliteDatabaseAccessor> logger, IOpt
     {
         logger.LogInformation(formattableQuery.Format, formattableQuery.GetArguments());
 
-        using SqliteConnection conn = await GetOpenedConnection(token);
-        using SqliteCommand cmd = GetCommand(formattableQuery, conn);
+        using var conn = await GetOpenedConnectionAsync(token);
+        using var cmd = GetCommand(formattableQuery, conn);
 
         try
         {
@@ -89,7 +90,7 @@ public class SqliteDatabaseAccessor(ILogger<SqliteDatabaseAccessor> logger, IOpt
         return cmd;
     }
 
-    private async Task<SqliteConnection> GetOpenedConnection(CancellationToken token)
+    private async Task<SqliteConnection> GetOpenedConnectionAsync(CancellationToken token)
     {
         var conn = new SqliteConnection(connectionStringOptions.CurrentValue.Default);
 

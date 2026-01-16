@@ -11,9 +11,8 @@ public class EmailSenderHostedService(IDatabaseAccessor db, IOptionsMonitor<Smtp
     public async Task SendEmailAsync(string email, string subject, string htmlMessage)
     {
         var message = CreateMessage(email, subject, htmlMessage);
-        var affectedRows = await db.CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, 
-                                                   Status) VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, 
-                                                   {nameof(MailStatus.InProgress)})");
+        var affectedRows = await db.CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, Status)
+                                                        VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, {nameof(MailStatus.InProgress)})");
         if (affectedRows != 1)
         {
             throw new InvalidOperationException($"Could not persist email message to {email}");
@@ -27,7 +26,7 @@ public class EmailSenderHostedService(IDatabaseAccessor db, IOptionsMonitor<Smtp
         logger.LogInformation("Starting background e-mail delivery");
 
         FormattableString query = $@"SELECT Id, Recipient, Subject, Message FROM EmailMessages WHERE Status NOT IN ({nameof(MailStatus.Sent)}, {nameof(MailStatus.Deleted)})";
-        DataSet dataSet = await db.QueryAsync(query);
+        var dataSet = await db.QueryAsync(query, token);
 
         try
         {
@@ -109,13 +108,11 @@ public class EmailSenderHostedService(IDatabaseAccessor db, IOptionsMonitor<Smtp
             catch (Exception sendException)
             {
                 var recipient = message?.To[0];
-
                 logger.LogError(sendException, "Couldn't send an e-mail to {recipient}", recipient);
-                // Increment the sender count
 
                 try
                 {
-                    bool shouldRequeue = await db.QueryScalarAsync<bool>($"UPDATE EmailMessages SET SenderCount = SenderCount + 1, Status=CASE WHEN SenderCount < {optionsMonitor.CurrentValue.MaxSenderCount} THEN Status ELSE {nameof(MailStatus.Deleted)} END WHERE Id={message.MessageId}; SELECT COUNT(*) FROM EmailMessages WHERE Id={message.MessageId} AND Status NOT IN ({nameof(MailStatus.Deleted)}, {nameof(MailStatus.Sent)})", token);
+                    var shouldRequeue = await db.QueryScalarAsync<bool>($"UPDATE EmailMessages SET SenderCount = SenderCount + 1, Status=CASE WHEN SenderCount < {optionsMonitor.CurrentValue.MaxSenderCount} THEN Status ELSE {nameof(MailStatus.Deleted)} END WHERE Id={message.MessageId}; SELECT COUNT(*) FROM EmailMessages WHERE Id={message.MessageId} AND Status NOT IN ({nameof(MailStatus.Deleted)}, {nameof(MailStatus.Sent)})", token);
 
                     if (shouldRequeue)
                     {
@@ -131,13 +128,11 @@ public class EmailSenderHostedService(IDatabaseAccessor db, IOptionsMonitor<Smtp
                 await Task.Delay(optionsMonitor.CurrentValue.DelayOnError, token);
             }
         }
+
         logger.LogInformation("E-mail background delivery stopped");
     }
 
-    public void Dispose()
-    {
-        CancelDeliveryTask();
-    }
+    public void Dispose() => CancelDeliveryTask();
 
     private MimeMessage CreateMessage(string email, string subject, string htmlMessage, string messageId = null)
     {

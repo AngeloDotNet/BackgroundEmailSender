@@ -1,17 +1,16 @@
 namespace BackgroundEmailSenderSample.Models.ValueTypes;
 
-public class Sql 
+public sealed class Sql
 {
+    public string Value { get; }
+
     private Sql(string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         Value = value;
     }
 
-    public string Value { get; }
+    public static explicit operator Sql(string value) => new(value);
 
-    public static explicit operator Sql(string value) => new Sql(value);
-    
-    public override string ToString() {
-        return this.Value;
-    }
+    public override string ToString() => Value;
 }

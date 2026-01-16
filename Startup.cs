@@ -6,7 +6,9 @@ public class Startup(IConfiguration configuration)
 
     public void ConfigureServices(IServiceCollection services)
     {
-        services.AddMvc();
+        //services.AddMvc();
+        //services.AddControllers();
+        services.AddControllersWithViews();
 
         services.AddSingleton<EmailSenderHostedService>();
         services.AddSingleton<IHostedService>(serviceProvider => serviceProvider.GetService<EmailSenderHostedService>());
@@ -20,9 +22,7 @@ public class Startup(IConfiguration configuration)
 
     public void Configure(WebApplication app)
     {
-        IHostEnvironment env = app.Environment;
-
-        if (env.IsDevelopment())
+        if (app.Environment.IsDevelopment())
         {
             app.UseDeveloperExceptionPage();
         }

@@ -1,6 +1,6 @@
 # Background email sender sample
 
-This application is a clone of the homonymous application of the one developed by BrightSoul available at this link: https://github.com/BrightSoul/background-email-sender.
+An ASP.NET Core application that uses a hosted service, such as sending email in the background, and is an updated clone of the application of the same name developed by BrightSoul available at this link: https://github.com/BrightSoul/background-email-sender.
 
 ## Update
 

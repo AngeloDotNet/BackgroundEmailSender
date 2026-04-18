@@ -4,17 +4,12 @@ public class Program
 {
     public static void Main(string[] args)
     {
-        // Vari esempi per usare il nuovo builder: https://docs.microsoft.com/en-us/aspnet/core/migration/50-to-60-samples
         var builder = WebApplication.CreateBuilder(args);
 
         Startup startup = new(builder.Configuration);
-
-        // Aggiungere i servizi per la dependency injection (metodo ConfigureServices)
         startup.ConfigureServices(builder.Services);
 
         var app = builder.Build();
-
-        // Usiamo i middleware (metodo Configure)
         startup.Configure(app);
 
         app.Run();

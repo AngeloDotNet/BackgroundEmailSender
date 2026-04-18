@@ -10,12 +10,22 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
     private readonly BufferBlock<MimeMessage> mailMessages;
     private readonly Lock clientLock = new();
 
-    private CancellationTokenSource? deliveryCancellationTokenSource;
-    private Task? deliveryTask;
+    private CancellationTokenSource deliveryCancellationTokenSource;
+    private Task deliveryTask;
     private SmtpClient smtpClient;
-    private SmtpOptions? connectedOptions;
+    private SmtpOptions connectedOptions;
     private bool disposed;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EmailSenderHostedService"/> class.
+    /// </summary>
+    /// <param name="db">Persistent store accessor used to persist and resume e-mail messages across restarts.</param>
+    /// <param name="optionsMonitor">Options monitor providing <see cref="SmtpOptions"/> which can change at runtime; this service reacts to changes on next send.</param>
+    /// <param name="logger">Logger used to record operational events and errors.</param>
+    /// <remarks>
+    /// The service maintains a bounded in-memory queue to provide backpressure under bursts and uses a single <see cref="MailKit.Net.Smtp.SmtpClient"/> instance
+    /// that is reused while the configured <see cref="SmtpOptions"/> remain the same. Persistence via <paramref name="db"/> ensures messages survive process restarts.
+    /// </remarks>
     public EmailSenderHostedService(IDatabaseAccessor db, IOptionsMonitor<SmtpOptions> optionsMonitor, ILogger<EmailSenderHostedService> logger)
     {
         ArgumentNullException.ThrowIfNull(db);
@@ -35,7 +45,22 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         smtpClient = new SmtpClient();
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Enqueues an e-mail for background delivery.
+    /// </summary>
+    /// <param name="email">Recipient e-mail address. Must not be <see langword="null" /> or empty.</param>
+    /// <param name="subject">E-mail subject. Must not be <see langword="null" />.</param>
+    /// <param name="htmlMessage">HTML body of the e-mail. Must not be <see langword="null" />.</param>
+    /// <returns>A <see cref="Task"/> that completes when the message has been persisted and accepted into the in-memory queue.</returns>
+    /// <remarks>
+    /// This method persists the message to the configured <see cref="IDatabaseAccessor"/> before enqueuing to guarantee delivery even if the process restarts.
+    /// The in-memory queue is bounded to DefaultQueueCapacity to provide backpressure; callers may experience latency when the queue is full.
+    /// </remarks>
+    /// <example>
+    /// <code language="csharp">
+    /// await emailSender.SendEmailAsync("user@example.com", "Hello", "&lt;h1&gt;Welcome&lt;/h1&gt;");
+    /// </code>
+    /// </example>
     public async Task SendEmailAsync(string email, string subject, string htmlMessage)
     {
         ArgumentNullException.ThrowIfNull(email);
@@ -45,8 +70,7 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         var message = CreateMessage(email, subject, htmlMessage);
 
         var affectedRows = await db
-            .CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, Status)
-                            VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, {nameof(MailStatus.InProgress)})")
+            .CommandAsync($@"INSERT INTO EmailMessages (Id, Recipient, Subject, Message, SenderCount, Status) VALUES ({message.MessageId}, {email}, {subject}, {htmlMessage}, 0, {nameof(MailStatus.InProgress)})")
             .ConfigureAwait(false);
 
         if (affectedRows != 1)
@@ -58,7 +82,15 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         await mailMessages.SendAsync(message).ConfigureAwait(false);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Starts the hosted service and resumes delivering any persisted but unsent messages.
+    /// </summary>
+    /// <param name="token">Cancellation token provided by the host. This token is observed while starting operations.</param>
+    /// <returns>A <see cref="Task"/> that completes when startup work is finished and background delivery has been scheduled.</returns>
+    /// <remarks>
+    /// On start, the service queries the persistent store for messages whose status is not <see cref="MailStatus.Sent"/> or <see cref="MailStatus.Deleted"/>
+    /// and enqueues them for delivery. Delivery runs on a background task started within this method; this method completes once the background task has been scheduled.
+    /// </remarks>
     public async Task StartAsync(CancellationToken token)
     {
         logger.LogInformation("Starting background e-mail delivery");
@@ -69,12 +101,13 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         try
         {
             var rows = dataSet.Tables[0].Rows;
+
             foreach (DataRow row in rows)
             {
                 var message = CreateMessage(Convert.ToString(row["Recipient"])!,
-                                            Convert.ToString(row["Subject"])!,
-                                            Convert.ToString(row["Message"])!,
-                                            Convert.ToString(row["Id"]));
+                                                        Convert.ToString(row["Subject"])!,
+                                                        Convert.ToString(row["Message"])!,
+                                                        Convert.ToString(row["Id"]));
                 await mailMessages.SendAsync(message, token).ConfigureAwait(false);
             }
 
@@ -90,7 +123,15 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Stops the hosted service and waits for the background delivery task to finish or for the host-provided token to cancel waiting.
+    /// </summary>
+    /// <param name="token">Cancellation token provided by the host which may shorten the time the host waits for graceful shutdown.</param>
+    /// <returns>A <see cref="Task"/> that completes once stop handling is finished or the host stops waiting.</returns>
+    /// <remarks>
+    /// This method requests cancellation of the delivery loop and then awaits either the completion of the delivery task or the host cancellation token.
+    /// Exceptions thrown during cancellation are logged but not rethrown to avoid throwing during shutdown.
+    /// </remarks>
     public async Task StopAsync(CancellationToken token)
     {
         CancelDeliveryTask();
@@ -120,15 +161,24 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
     }
 
     /// <summary>
-    /// Main delivery loop. Reuses a single SMTP connection while it is valid to reduce connect/auth overhead.
+    /// Main delivery loop executed on a background thread that receives enqueued <see cref="MimeMessage"/> instances and sends them.
     /// </summary>
+    /// <param name="token">Cancellation token used to stop the delivery loop.</param>
+    /// <returns>A <see cref="Task"/> that completes when the delivery loop exits due to cancellation or an unrecoverable failure.</returns>
+    /// <remarks>
+    /// Behavior notes:
+    /// - Reuses a single SMTP connection while the <see cref="SmtpOptions"/> instance remains the same to reduce connect/auth overhead.
+    /// - On transient failures, increments a SenderCount in persistent storage and requeues the message if retry limit hasn't been reached.
+    /// - When an error occurs, waits for <see cref="SmtpOptions.DelayOnError"/> before processing the next message and recreates the SMTP client to ensure clean reconnects.
+    /// - Observes <paramref name="token"/> for cooperative cancellation.
+    /// </remarks>
     public async Task DeliverAsync(CancellationToken token)
     {
         logger.LogInformation("E-mail background delivery started");
 
         while (!token.IsCancellationRequested)
         {
-            MimeMessage? message = null;
+            MimeMessage message = null;
 
             try
             {
@@ -269,6 +319,13 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         }
     }
 
+    /// <summary>
+    /// Disposes resources used by the hosted service.
+    /// </summary>
+    /// <remarks>
+    /// This method is idempotent. It cancels the delivery task, disposes the SMTP client, and completes the in-memory queue.
+    /// Callers should not use the instance after disposal.
+    /// </remarks>
     public void Dispose()
     {
         if (disposed)
@@ -291,7 +348,7 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         disposed = true;
     }
 
-    private MimeMessage CreateMessage(string email, string subject, string htmlMessage, string? messageId = null)
+    private MimeMessage CreateMessage(string email, string subject, string htmlMessage, string messageId = null)
     {
         var message = new MimeMessage();
 
@@ -301,7 +358,7 @@ public class EmailSenderHostedService : IEmailSender, IHostedService, IDisposabl
         message.Subject = subject;
 
         // If messageId not provided generate one.
-        message.MessageId = messageId ?? SequentialGuidGenerator.Instance.NewGuid().ToString();
+        message.MessageId = messageId ?? GuidV8Time.NewGuid().ToString();
         message.Body = new TextPart("html") { Text = htmlMessage };
 
         return message;
